@@ -1,0 +1,262 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"> 
+<title>Keychain Proximity</title>
+
+<style>
+  :root{
+    --bg: #0f1722;
+    --card: #0b1220;
+    --accent1:#ff4d4d;
+    --accent2:#ffd24d;
+    --accent3:#4dff88;
+    --text: #e6eef8;
+    --muted: #9fb0c8;
+  }
+
+  /* Page body */
+  html,body{
+    height:100%;
+    margin:0;
+    background:linear-gradient(180deg,#071226 0%, #0b1520 100%);
+    color:var(--text);
+    font-family: Inter, Roboto, Arial, sans-serif;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+  }
+
+  /* Center column and make it full height */
+  .wrap{
+    min-height:100%;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:flex-start;
+    padding:18px;
+    box-sizing:border-box;
+    gap:18px;
+  }
+
+  header{
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+  }
+  h1{
+    margin:0;
+    font-size:20px;
+    letter-spacing:0.2px;
+  }
+  small { color:var(--muted); font-size:12px; }
+
+  /* Card */
+  .card{
+    width:100%;
+    max-width:720px;
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border-radius:12px;
+    padding:14px;
+    box-sizing:border-box;
+    box-shadow: 0 6px 18px rgba(6,12,20,0.45);
+    backdrop-filter: blur(6px);
+  }
+
+  /* Big proximity bar */
+  #bar{
+    width:100%;
+    height:44px;
+    background:rgba(255,255,255,0.06);
+    border-radius:10px;
+    overflow:hidden;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  #fill{
+    height:100%;
+    width:0%;
+    background: linear-gradient(90deg,var(--accent1),var(--accent2),var(--accent3));
+    transition: width 140ms linear;
+  }
+  .proximity-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    margin-top:10px;
+  }
+  .big-val{
+    font-size:26px;
+    font-weight:700;
+  }
+  .rssi{
+    color:var(--muted);
+    font-size:13px;
+  }
+
+  /* Buttons: big and tappable */
+  .controls{ display:flex; gap:12px; margin-top:14px; flex-wrap:wrap; }
+  button{
+    background:linear-gradient(180deg,#1f6feb,#165ec7);
+    color:white;
+    border:0;
+    padding:12px 16px;
+    border-radius:10px;
+    font-size:16px;
+    min-width:110px;
+    box-shadow: 0 6px 10px rgba(12,20,40,0.4);
+    touch-action:manipulation;
+  }
+  button.secondary{
+    background:linear-gradient(180deg,#2b394a,#17232d);
+    border:1px solid rgba(255,255,255,0.03);
+    color:var(--text);
+  }
+  button:disabled{ opacity:0.45; filter:grayscale(0.15); }
+
+  /* Footer / hint */
+  footer{ width:100%; max-width:720px; color:var(--muted); font-size:13px; margin-top:8px; text-align:center; }
+
+  /* Make things larger on small screens */
+  @media (max-width:420px){
+    body{ padding:0; }
+    .wrap { padding:14px; gap:14px; }
+    h1{ font-size:18px; }
+    #bar{ height:48px; }
+    .big-val{ font-size:28px; }
+    button{ font-size:17px; padding:14px 18px; min-width:120px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Keychain Proximity</h1>
+        <small id="status">Idle</small>
+      </div>
+      <div style="text-align:right">
+        <small id="deviceName">Not connected</small>
+      </div>
+    </header>
+
+    <div class="card">
+      <div id="bar"><div id="fill"></div></div>
+
+      <div class="proximity-row">
+        <div>
+          <div class="big-val" id="val">— / 100</div>
+          <div class="rssi" id="rssi">Rssi: — dBm</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;">
+          <div style="font-size:13px;color:var(--muted)">Hold <strong>Ring</strong> to beep</div>
+          <div style="display:flex;gap:8px;">
+            <button id="start" class="secondary">Start Scan</button>
+            <button id="connect" class="secondary" disabled>Connect</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:center;margin-top:12px;">
+        <button id="ring" disabled style="min-width:60%; font-size:18px; padding:14px 18px;">Hold to Ring</button>
+      </div>
+    </div>
+
+    <footer>
+      <div>Tip: add this page to your Home screen for quick access (Chrome → menu → Add to Home screen)</div>
+    </footer>
+  </div>
+
+<script>
+/* ===== CONFIG (keep in sync with ESP32) ===== */
+const SERVICE_UUID = '12345678-1234-1234-1234-1234567890ab';
+const CHAR_UUID    = '87654321-4321-4321-4321-ba0987654321';
+const RSSI_MIN = -90;
+const RSSI_MAX = -40;
+const ALPHA = 0.25;
+/* =========================================== */
+
+let smoothed = null;
+let device = null, server = null, char = null, scanner = null;
+const statusEl = document.getElementById('status');
+const deviceNameEl = document.getElementById('deviceName');
+const fill = document.getElementById('fill');
+const valEl = document.getElementById('val');
+const rssiEl = document.getElementById('rssi');
+
+document.getElementById('start').onclick = async () => {
+  statusEl.innerText = 'Requesting scan...';
+  try {
+    if (navigator.bluetooth.requestLEScan) {
+      scanner = await navigator.bluetooth.requestLEScan({
+        filters: [{services: [SERVICE_UUID]}],
+        keepRepeatedDevices: true
+      });
+      navigator.bluetooth.addEventListener('advertisementreceived', onAdvertisement);
+      statusEl.innerText = 'Scanning — waiting for adverts...';
+      document.getElementById('connect').disabled = false;
+    } else {
+      statusEl.innerText = 'Scan not supported — use Connect';
+      document.getElementById('connect').disabled = false;
+    }
+  } catch (e){
+    statusEl.innerText = 'Scan error: ' + e;
+    console.error(e);
+  }
+};
+
+async function onAdvertisement(evt){
+  const rssi = evt.rssi;
+  if (smoothed === null) smoothed = rssi;
+  else smoothed = ALPHA * rssi + (1 - ALPHA) * smoothed;
+
+  let prox = Math.round((smoothed - RSSI_MIN) / (RSSI_MAX - RSSI_MIN) * 100);
+  prox = Math.max(0, Math.min(100, prox));
+
+  fill.style.width = prox + '%';
+  valEl.innerText = prox + ' / 100';
+  rssiEl.innerText = 'Rssi: ' + Math.round(smoothed) + ' dBm';
+}
+
+document.getElementById('connect').onclick = async () => {
+  try {
+    statusEl.innerText = 'Selecting device...';
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{services: [SERVICE_UUID]}],
+      optionalServices: [SERVICE_UUID]
+    });
+    deviceNameEl.innerText = device.name || 'Device';
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE_UUID);
+    char = await svc.getCharacteristic(CHAR_UUID);
+    statusEl.innerText = 'Connected to ' + (device.name || 'device');
+    document.getElementById('ring').disabled = false;
+
+    try {
+      await device.watchAdvertisements();
+      device.addEventListener('advertisementreceived', onAdvertisement);
+    } catch(e){ console.warn('watchAdvertisements not supported', e); }
+  } catch(e){
+    statusEl.innerText = 'Connect failed: ' + e;
+    console.error(e);
+  }
+};
+
+const ringBtn = document.getElementById('ring');
+ringBtn.onpointerdown = async () => {
+  if (!char) { alert('Not connected'); return; }
+  ringBtn.innerText = 'Release to stop';
+  try {
+    await char.writeValue(new TextEncoder().encode("RING"));
+  } catch(e){ console.warn('write failed', e); }
+};
+ringBtn.onpointerup = () => { ringBtn.innerText = 'Hold to Ring'; };
+ringBtn.onpointercancel = () => { ringBtn.innerText = 'Hold to Ring'; };
+
+// helper
+function id(s){ return document.getElementById(s); }
+</script>
+</body>
+</html>
